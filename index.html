@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>VoiceBot</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--accent:#4f46e5;--muted:#94a3b8;--text:#e6eef8}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071029 0%, #081429 100%);color:var(--text);margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .app{width:100%;max-width:700px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.03));border-radius:12px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    header{display:flex;gap:12px;align-items:center}
+    h1{font-size:20px;margin:0}
+    .controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+    button{background:var(--card);color:var(--text);border:1px solid rgba(255,255,255,0.03);padding:10px 14px;border-radius:10px;cursor:pointer}
+    button.primary{background:linear-gradient(90deg,var(--accent),#06b6d4);color:#021026;border:none}
+    .panel{background:#051021;padding:12px;border-radius:10px;min-height:100px;overflow:auto;margin-top:16px}
+    .transcript{white-space:pre-wrap;color:var(--text);font-size:15px;min-height:60px}
+    .small{color:var(--muted);font-size:13px}
+    input[type=text]{width:100%;padding:10px;border-radius:8px;background:#01101b;border:1px solid rgba(255,255,255,0.03);color:var(--text)}
+    .status{font-size:13px;padding:6px;border-radius:8px;background:#021022;color:var(--muted);display:inline-block}
+    .controls > * {flex:0 0 auto}
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Voice chatbot interface">
+    <header>
+      <div>
+        <h1>VoiceBot</h1>
+        <div class="small">Speak naturally. Click <strong>Start Listening</strong> and ask a question.</div>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div class="status" id="status">Ready</div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <button id="startBtn" class="primary">Start Listening 🎙️</button>
+      <button id="stopBtn">Stop</button>
+      <button id="stopResponseBtn">Stop Response 🛑</button>
+      <input id="textInput" type="text" placeholder="Type your question..." />
+      <button id="askBtn">Ask</button>
+    </div>
+
+    <div class="panel">
+      <div class="small">Transcript</div>
+      <div id="transcript" class="transcript">(no transcript yet)</div>
+    </div>
+
+    <div class="panel">
+      <div class="small">Bot reply</div>
+      <div id="reply" class="transcript"></div>
+    </div>
+  </div>
+
+  <script>
+    // Elements
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const askBtn = document.getElementById("askBtn");
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+    const replyEl = document.getElementById("reply");
+    const textInput = document.getElementById("textInput");
+
+    let lastReply = "";
+    function setStatus(s){ statusEl.textContent = s; }
+
+    const stopResponseBtn = document.getElementById("stopResponseBtn");
+
+    stopResponseBtn.onclick = ()=>{
+      // Stop any ongoing speech
+      if(window.speechSynthesis.speaking){
+        window.speechSynthesis.cancel();
+      }
+
+      // Clear bot reply
+      replyEl.textContent = "";
+
+      // Reset status so user can ask again
+      setStatus("Ready");
+    };
+
+    // Speech Synthesis
+    function speak(text) {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      if (voices && voices.length) {
+        const v = voices.find(x => x.lang && x.lang.startsWith("en")) || voices[0];
+        if (v) utter.voice = v;
+      }
+      utter.rate = 1;
+      utter.pitch = 1;
+      speechSynthesis.speak(utter);
+    }
+    
+    // Speech Recognition
+    let recognition=null, recognizing=false;
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SR();
+      recognition.lang='en-US';
+      recognition.interimResults=false;
+      recognition.maxAlternatives=1;
+      recognition.onstart = ()=>{ recognizing=true; setStatus("Listening..."); };
+      recognition.onend = ()=>{ recognizing=false; setStatus("Ready"); };
+      recognition.onerror = (e)=>{ console.warn(e); setStatus("Error listening"); recognizing=false; };
+      recognition.onresult = (ev)=>{
+        const t = ev.results[0][0].transcript;
+        transcriptEl.textContent = t;
+        textInput.value = t;
+        handleQuestion(t);
+      };
+    } else { setStatus("Speech recognition not supported"); }
+
+    startBtn.onclick = ()=>{ if(recognition) recognition.start(); };
+    stopBtn.onclick = ()=>{ if(recognition && recognizing) recognition.stop(); setStatus("Stopped"); };
+    askBtn.onclick = ()=>{ const q=textInput.value.trim(); if(!q) return; transcriptEl.textContent=q; handleQuestion(q); };
+
+    textInput.addEventListener("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); askBtn.click(); } });
+
+    async function handleQuestion(question){
+      setStatus("Thinking...");
+      try{
+        const res = await fetch("http://localhost:8000/bot/handle", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          // body:JSON.stringify({question})
+          body: JSON.stringify({ transcript: question })
+        });
+        const data = await res.json();
+        const answer = data.answer || "No reply from server.";
+        replyEl.textContent = answer;
+        lastReply = answer;
+        speak(answer);
+        setStatus("Ready");
+      } catch(e){
+        console.error(e);
+        replyEl.textContent="⚠️ Error calling backend";
+        setStatus("Error");
+      }
+    }
+  </script>
+</body>
+</html>
+
